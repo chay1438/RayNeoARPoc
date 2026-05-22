@@ -65,6 +65,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.UUID
 
+enum class AppMode { SURVEY, NAVIGATION }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(repository: WaypointRepository, modifier: Modifier = Modifier) {
@@ -130,6 +132,8 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
     
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
     var showBottomSheet by remember { mutableStateOf(false) }
+
+    var currentMode by remember { mutableStateOf(AppMode.NAVIGATION) }
 
     var targetedPosition by remember { mutableStateOf<com.example.indoorar.shared.models.Vector3?>(null) }
 
@@ -342,6 +346,51 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Top
             ) {
+                // Mode Toggle
+                Row(
+                    modifier = Modifier
+                        .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(24.dp))
+                        .padding(4.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Button(
+                        onClick = { 
+                            currentMode = AppMode.SURVEY
+                            activeDestination = null 
+                        },
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                            containerColor = if (currentMode == AppMode.SURVEY) Color.Cyan.copy(alpha = 0.8f) else Color.Transparent,
+                            contentColor = if (currentMode == AppMode.SURVEY) Color.Black else Color.White
+                        ),
+                        shape = RoundedCornerShape(20.dp)
+                    ) {
+                        Text("Survey Area")
+                    }
+                    Button(
+                        onClick = { currentMode = AppMode.NAVIGATION },
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                            containerColor = if (currentMode == AppMode.NAVIGATION) Color.Cyan.copy(alpha = 0.8f) else Color.Transparent,
+                            contentColor = if (currentMode == AppMode.NAVIGATION) Color.Black else Color.White
+                        ),
+                        shape = RoundedCornerShape(20.dp)
+                    ) {
+                        Text("Navigate")
+                    }
+                }
+
+                if (currentMode == AppMode.SURVEY) {
+                    Text(
+                        "Survey Mode Active: Map your surroundings", 
+                        color = Color.Yellow, 
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier
+                            .padding(top = 8.dp)
+                            .background(Color.Black.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+
                 // Top: Controls & Nav Info
                 if (navState?.destination != null && !navState!!.isReached) {
                     // Navigation HUD Panel (Glassmorphism look)
@@ -373,125 +422,136 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
                             .padding(16.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text("Your Locations", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 16.dp))
+                        Text(if (currentMode == AppMode.SURVEY) "Survey Tools" else "Navigation Menu", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 16.dp))
                         
-                        if (waypoints.isEmpty()) {
-                            Text("No locations saved yet.", color = Color.Gray, modifier = Modifier.padding(bottom = 16.dp))
-                        } else {
-                            waypoints.forEach { wp ->
-                                val isSelected = wp == activeDestination
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 4.dp)
-                                        .clickable {
-                                            activeDestination = if (isSelected) null else wp
-                                            if (isSelected) showBottomSheet = false // auto close when selected
+                        if (currentMode == AppMode.NAVIGATION) {
+                            if (waypoints.isEmpty()) {
+                                Text("No surroundings loaded.", color = Color.Gray, modifier = Modifier.padding(bottom = 16.dp))
+                            } else {
+                                waypoints.forEach { wp ->
+                                    val isSelected = wp == activeDestination
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 4.dp)
+                                            .clickable {
+                                                activeDestination = if (isSelected) null else wp
+                                                if (isSelected) showBottomSheet = false // auto close when selected
+                                            }
+                                            .background(if (isSelected) Color.Cyan.copy(alpha = 0.2f) else Color.Transparent, RoundedCornerShape(8.dp))
+                                            .border(1.dp, if (isSelected) Color.Cyan else Color.LightGray, RoundedCornerShape(8.dp))
+                                            .padding(12.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column {
+                                            Text(wp.name, fontWeight = FontWeight.Bold)
+                                            Text("${"%.1f".format(wp.position.x)}, ${"%.1f".format(wp.position.z)}", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                                         }
-                                        .background(if (isSelected) Color.Cyan.copy(alpha = 0.2f) else Color.Transparent, RoundedCornerShape(8.dp))
-                                        .border(1.dp, if (isSelected) Color.Cyan else Color.LightGray, RoundedCornerShape(8.dp))
-                                        .padding(12.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column {
-                                        Text(wp.name, fontWeight = FontWeight.Bold)
-                                        Text("${"%.1f".format(wp.position.x)}, ${"%.1f".format(wp.position.z)}", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
-                                    }
-                                    if (isSelected) {
-                                        Text("Navigating", color = Color.Cyan, fontWeight = FontWeight.Bold)
+                                        if (isSelected) {
+                                            Text("Navigating", color = Color.Cyan, fontWeight = FontWeight.Bold)
+                                        }
                                     }
                                 }
                             }
+                        } else {
+                            // Survey Mode doesn't show the nav list
+                            Text("Drop markers to survey the area and upload to the cloud.", color = Color.Gray, modifier = Modifier.padding(bottom = 16.dp))
                         }
 
                         Spacer(modifier = Modifier.height(16.dp))
 
                         if (currentPose != null) {
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 32.dp)) {
-                                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                                    Button(onClick = {
-                                        newWaypointName = ""
-                                        showNameDialog = true
-                                    }) {
-                                        Text("Drop Marker Here")
-                                    }
-                                    
-                                    Button(
-                                        onClick = { 
-                                            waypoints.clear() 
-                                            activeDestination = null
-                                            activeMap = null
-                                            repository.saveWaypoints(waypoints)
-                                        },
-                                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Color.Red.copy(alpha = 0.8f))
-                                    ) {
-                                        Text("Clear All")
+                                if (currentMode == AppMode.SURVEY) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                                        Button(onClick = {
+                                            newWaypointName = ""
+                                            showNameDialog = true
+                                        }) {
+                                            Text("Drop Marker Here")
+                                        }
+                                        
+                                        Button(
+                                            onClick = { 
+                                                waypoints.clear() 
+                                                activeDestination = null
+                                                activeMap = null
+                                                repository.saveWaypoints(waypoints)
+                                            },
+                                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = Color.Red.copy(alpha = 0.8f))
+                                        ) {
+                                            Text("Clear Survey")
+                                        }
                                     }
                                 }
 
                                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                                    Button(
-                                        onClick = {
-                                            isUploading = true
-                                            scope.launch {
-                                                try {
-                                                    // Auto-generate linear edges for POC
-                                                    val nodes = waypoints.map { com.example.indoorar.shared.models.NavNode(it.id, it.position) }
-                                                    val edges = mutableListOf<com.example.indoorar.shared.models.NavEdge>()
-                                                    for (i in 0 until nodes.size - 1) {
-                                                        edges.add(com.example.indoorar.shared.models.NavEdge(nodes[i].id, nodes[i+1].id, nodes[i].position.distanceTo(nodes[i+1].position)))
-                                                    }
-                                                    
-                                                    val mapLocation = com.example.indoorar.shared.models.MapLocation(
-                                                        id = UUID.randomUUID().toString(),
-                                                        name = "Saved Map ${System.currentTimeMillis()}",
-                                                        cloudAnchorId = "test_anchor",
-                                                        navGraph = com.example.indoorar.shared.models.NavGraph(nodes, edges, waypoints.toList())
-                                                    )
-                                                    
-                                                    val success = com.example.indoorar.network.NetworkManager.uploadMap(mapLocation)
-                                                    if (success) {
-                                                        android.widget.Toast.makeText(context, "Map Uploaded!", android.widget.Toast.LENGTH_SHORT).show()
-                                                    } else {
-                                                        android.widget.Toast.makeText(context, "Upload Failed", android.widget.Toast.LENGTH_SHORT).show()
-                                                    }
-                                                } finally {
-                                                    isUploading = false
-                                                }
-                                            }
-                                        },
-                                        enabled = !isUploading && waypoints.isNotEmpty()
-                                    ) {
-                                        Text(if (isUploading) "Uploading..." else "Save to Cloud")
-                                    }
-
-                                    Button(
-                                        onClick = {
-                                            isDownloading = true
-                                            scope.launch {
-                                                try {
-                                                    val maps = com.example.indoorar.network.NetworkManager.getMaps()
-                                                    if (maps.isNotEmpty()) {
-                                                        // Just download the first map for POC
-                                                        val map = com.example.indoorar.network.NetworkManager.downloadMap(maps.first().id)
-                                                        if (map != null) {
-                                                            activeMap = map
-                                                            waypoints.clear()
-                                                            waypoints.addAll(map.navGraph.waypoints)
-                                                            android.widget.Toast.makeText(context, "Map Loaded: ${map.name}", android.widget.Toast.LENGTH_SHORT).show()
+                                    if (currentMode == AppMode.SURVEY) {
+                                        Button(
+                                            onClick = {
+                                                isUploading = true
+                                                scope.launch {
+                                                    try {
+                                                        // Auto-generate linear edges for POC
+                                                        val nodes = waypoints.map { com.example.indoorar.shared.models.NavNode(it.id, it.position) }
+                                                        val edges = mutableListOf<com.example.indoorar.shared.models.NavEdge>()
+                                                        for (i in 0 until nodes.size - 1) {
+                                                            edges.add(com.example.indoorar.shared.models.NavEdge(nodes[i].id, nodes[i+1].id, nodes[i].position.distanceTo(nodes[i+1].position)))
                                                         }
-                                                    } else {
-                                                        android.widget.Toast.makeText(context, "No maps on server", android.widget.Toast.LENGTH_SHORT).show()
+                                                        
+                                                        val mapLocation = com.example.indoorar.shared.models.MapLocation(
+                                                            id = UUID.randomUUID().toString(),
+                                                            name = "Saved Map ${System.currentTimeMillis()}",
+                                                            cloudAnchorId = "test_anchor",
+                                                            navGraph = com.example.indoorar.shared.models.NavGraph(nodes, edges, waypoints.toList())
+                                                        )
+                                                        
+                                                        val success = com.example.indoorar.network.NetworkManager.uploadMap(mapLocation)
+                                                        if (success) {
+                                                            android.widget.Toast.makeText(context, "Survey Uploaded Successfully!", android.widget.Toast.LENGTH_SHORT).show()
+                                                            currentMode = AppMode.NAVIGATION
+                                                            showBottomSheet = false
+                                                        } else {
+                                                            android.widget.Toast.makeText(context, "Upload Failed", android.widget.Toast.LENGTH_SHORT).show()
+                                                        }
+                                                    } finally {
+                                                        isUploading = false
                                                     }
-                                                } finally {
-                                                    isDownloading = false
                                                 }
-                                            }
-                                        },
-                                        enabled = !isDownloading
-                                    ) {
-                                        Text(if (isDownloading) "Downloading..." else "Load from Cloud")
+                                            },
+                                            enabled = !isUploading && waypoints.isNotEmpty()
+                                        ) {
+                                            Text(if (isUploading) "Uploading Survey..." else "Complete Survey & Upload")
+                                        }
+                                    } else {
+                                        Button(
+                                            onClick = {
+                                                isDownloading = true
+                                                scope.launch {
+                                                    try {
+                                                        val maps = com.example.indoorar.network.NetworkManager.getMaps()
+                                                        if (maps.isNotEmpty()) {
+                                                            // Just download the first map for POC
+                                                            val map = com.example.indoorar.network.NetworkManager.downloadMap(maps.first().id)
+                                                            if (map != null) {
+                                                                activeMap = map
+                                                                waypoints.clear()
+                                                                waypoints.addAll(map.navGraph.waypoints)
+                                                                android.widget.Toast.makeText(context, "Surroundings Loaded!", android.widget.Toast.LENGTH_SHORT).show()
+                                                            }
+                                                        } else {
+                                                            android.widget.Toast.makeText(context, "No surroundings found on server", android.widget.Toast.LENGTH_SHORT).show()
+                                                        }
+                                                    } finally {
+                                                        isDownloading = false
+                                                    }
+                                                }
+                                            },
+                                            enabled = !isDownloading
+                                        ) {
+                                            Text(if (isDownloading) "Loading..." else "Load Surroundings")
+                                        }
                                     }
                                 }
                             }
