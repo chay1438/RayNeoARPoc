@@ -328,76 +328,80 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
                     label = "pulseAlpha"
                 )
 
-                androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
-                    val pathPoints = navState!!.pathPoints
-                    
-                    // First, draw a line connecting all visible segments
-                    for (i in 0 until pathPoints.size - 1) {
-                        val p1 = CameraProjection.projectToScreen(
-                            worldPoint = pathPoints[i],
-                            cameraPose = poseForBreadcrumbs,
-                            screenWidth = screenSize.width.toFloat(),
-                            screenHeight = screenSize.height.toFloat()
-                        )
-                        val p2 = CameraProjection.projectToScreen(
-                            worldPoint = pathPoints[i + 1],
-                            cameraPose = poseForBreadcrumbs,
-                            screenWidth = screenSize.width.toFloat(),
-                            screenHeight = screenSize.height.toFloat()
-                        )
-
-                        // If both points are in front of the camera, draw normally
-                        if (p1.depth > 0.1f && p2.depth > 0.1f) {
-                            val startOffset = androidx.compose.ui.geometry.Offset(p1.x, p1.y)
-                            val endOffset = androidx.compose.ui.geometry.Offset(p2.x, p2.y)
-                            
-                            // Glowing line
-                            drawLine(color = Color.Cyan.copy(alpha = pulseAlpha), start = startOffset, end = endOffset, strokeWidth = 30f, cap = androidx.compose.ui.graphics.StrokeCap.Round)
-                            drawLine(color = Color.White.copy(alpha = pulseAlpha + 0.2f), start = startOffset, end = endOffset, strokeWidth = 10f, cap = androidx.compose.ui.graphics.StrokeCap.Round)
-
-                            // Directional Arrow
-                            val dx = p2.x - p1.x
-                            val dy = p2.y - p1.y
-                            if (kotlin.math.sqrt(dx*dx + dy*dy) > 50f) {
-                                val angle = kotlin.math.atan2(dy, dx)
-                                val midX = (p1.x + p2.x) / 2
-                                val midY = (p1.y + p2.y) / 2
-                                val arrowLength = 50.0
-                                val arrowAngle = Math.PI / 6
-                                val arrowPath = androidx.compose.ui.graphics.Path().apply {
-                                    moveTo(midX, midY)
-                                    lineTo((midX - arrowLength * kotlin.math.cos(angle - arrowAngle)).toFloat(), (midY - arrowLength * kotlin.math.sin(angle - arrowAngle)).toFloat())
-                                    moveTo(midX, midY)
-                                    lineTo((midX - arrowLength * kotlin.math.cos(angle + arrowAngle)).toFloat(), (midY - arrowLength * kotlin.math.sin(angle + arrowAngle)).toFloat())
-                                }
-                                drawPath(path = arrowPath, color = Color.Yellow, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 12f, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
-                            }
-                        } else if (p1.depth > 0.1f || p2.depth > 0.1f) {
-                            // One point is behind camera. Draw from bottom center to the visible point!
-                            val visibleP = if (p1.depth > 0.1f) p1 else p2
-                            val startOffset = androidx.compose.ui.geometry.Offset(screenSize.width / 2f, screenSize.height.toFloat())
-                            val endOffset = androidx.compose.ui.geometry.Offset(visibleP.x, visibleP.y)
-                            
-                            drawLine(color = Color.Cyan.copy(alpha = pulseAlpha), start = startOffset, end = endOffset, strokeWidth = 30f, cap = androidx.compose.ui.graphics.StrokeCap.Round)
-                            drawLine(color = Color.White.copy(alpha = pulseAlpha + 0.2f), start = startOffset, end = endOffset, strokeWidth = 10f, cap = androidx.compose.ui.graphics.StrokeCap.Round)
+                // Mini-Map Overlay
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = 180.dp, bottom = 150.dp, start = 32.dp, end = 32.dp)
+                        .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(24.dp))
+                        .padding(24.dp)
+                ) {
+                    androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                        val pathPoints = navState!!.pathPoints
+                        if (pathPoints.isEmpty()) return@Canvas
+                        
+                        var minX = Float.MAX_VALUE
+                        var maxX = -Float.MAX_VALUE
+                        var minZ = Float.MAX_VALUE
+                        var maxZ = -Float.MAX_VALUE
+                        
+                        for (p in pathPoints) {
+                            if (p.x < minX) minX = p.x
+                            if (p.x > maxX) maxX = p.x
+                            if (p.z < minZ) minZ = p.z
+                            if (p.z > maxZ) maxZ = p.z
                         }
-                    }
-
-                    // Next, draw large debug nodes at every projected path point so we can guarantee Canvas is working
-                    for (point in pathPoints) {
-                        val p = CameraProjection.projectToScreen(
-                            worldPoint = point,
-                            cameraPose = poseForBreadcrumbs,
-                            screenWidth = screenSize.width.toFloat(),
-                            screenHeight = screenSize.height.toFloat()
-                        )
-                        if (p.depth > 0.1f) {
-                            drawCircle(
-                                color = Color.Magenta.copy(alpha = 0.8f),
-                                radius = 25f,
-                                center = androidx.compose.ui.geometry.Offset(p.x, p.y)
-                            )
+                        
+                        val padding = 2f
+                        minX -= padding; maxX += padding
+                        minZ -= padding; maxZ += padding
+                        
+                        val mapWidth = maxX - minX
+                        val mapHeight = maxZ - minZ
+                        
+                        if (mapWidth <= 0f || mapHeight <= 0f) return@Canvas
+                        
+                        val scaleX = size.width / mapWidth
+                        val scaleY = size.height / mapHeight
+                        val scale = kotlin.math.min(scaleX, scaleY)
+                        
+                        val offsetX = (size.width - (mapWidth * scale)) / 2f
+                        val offsetY = (size.height - (mapHeight * scale)) / 2f
+                        
+                        fun mapTo2D(x: Float, z: Float): androidx.compose.ui.geometry.Offset {
+                            val px = (x - minX) * scale + offsetX
+                            val py = (z - minZ) * scale + offsetY
+                            return androidx.compose.ui.geometry.Offset(px, py)
                         }
+                        
+                        // Draw Path
+                        val path = androidx.compose.ui.graphics.Path()
+                        for (i in pathPoints.indices) {
+                            val pt = mapTo2D(pathPoints[i].x, pathPoints[i].z)
+                            if (i == 0) path.moveTo(pt.x, pt.y) else path.lineTo(pt.x, pt.y)
+                        }
+                        drawPath(
+                            path = path,
+                            color = Color.Cyan.copy(alpha = pulseAlpha),
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 16f, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round)
+                        )
+                        
+                        // Draw User Position and Orientation
+                        val userPos2D = mapTo2D(poseForBreadcrumbs.position.x, poseForBreadcrumbs.position.z)
+                        drawCircle(color = Color.Blue, radius = 24f, center = userPos2D)
+                        drawCircle(color = Color.White, radius = 8f, center = userPos2D)
+                        
+                        // Calculate User Heading Arrow
+                        val yawRad = Math.toRadians(poseForBreadcrumbs.rotation.y.toDouble())
+                        val dx = kotlin.math.sin(yawRad).toFloat()
+                        val dz = -kotlin.math.cos(yawRad).toFloat()
+                        val userDirX = userPos2D.x + dx * 40f
+                        val userDirY = userPos2D.y + dz * 40f
+                        drawLine(color = Color.Yellow, start = userPos2D, end = androidx.compose.ui.geometry.Offset(userDirX, userDirY), strokeWidth = 12f, cap = androidx.compose.ui.graphics.StrokeCap.Round)
+                        
+                        // Draw Destination
+                        val destPos2D = mapTo2D(activeDestination!!.position.x, activeDestination!!.position.z)
+                        drawCircle(color = Color.Green, radius = 30f, center = destPos2D)
                     }
                 }
             }
@@ -486,26 +490,6 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
                     ) {
                         Text("Navigating to: ${navState!!.destination!!.name}", color = Color.White, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         Text("${"%.1f".format(navState!!.distanceMeters)}m remaining", color = Color.Cyan, style = MaterialTheme.typography.bodyLarge)
-                    }
-
-                    // Giant 2D Directional Arrow
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        val turnAngle = navState!!.angleDegreesToTurn
-                        val isStraight = turnAngle in -25f..25f
-                        val isLeft = turnAngle < -25f
-                        
-                        Text(
-                            text = if (isStraight) "⬆" else if (isLeft) "⬅" else "➡",
-                            fontSize = 180.sp,
-                            color = if (isStraight) Color.Green.copy(alpha = 0.8f) else Color.Yellow.copy(alpha = 0.8f),
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier
-                                .offset(y = (-100).dp)
-                                .rotate(if (isStraight) 0f else if (isLeft) -25f else 25f)
-                        )
                     }
                 }
             }
