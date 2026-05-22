@@ -203,6 +203,7 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
             // ARCore Sceneview - Full screen
             io.github.sceneview.ar.ARScene(
                 modifier = Modifier.fillMaxSize(),
+                planeRenderer = false,
                 onSessionUpdated = { session, frame ->
                     // Update the pose from the ARCore camera frame
                     val camera = frame.camera
@@ -453,6 +454,26 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
                     ) {
                         Text("Navigating to: ${navState!!.destination!!.name}", color = Color.White, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         Text("${"%.1f".format(navState!!.distanceMeters)}m remaining", color = Color.Cyan, style = MaterialTheme.typography.bodyLarge)
+                    }
+
+                    // Giant 2D Directional Arrow
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        val turnAngle = navState!!.angleDegreesToTurn
+                        val isStraight = turnAngle in -25f..25f
+                        val isLeft = turnAngle < -25f
+                        
+                        Text(
+                            text = if (isStraight) "⬆" else if (isLeft) "⬅" else "➡",
+                            fontSize = 180.sp,
+                            color = if (isStraight) Color.Green.copy(alpha = 0.8f) else Color.Yellow.copy(alpha = 0.8f),
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .offset(y = (-100).dp)
+                                .rotate(if (isStraight) 0f else if (isLeft) -25f else 25f)
+                        )
                     }
                 }
             }
