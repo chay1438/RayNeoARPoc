@@ -311,7 +311,7 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
                             screenHeight = screenSize.height.toFloat()
                         )
 
-                        if (p1.isVisible && p2.isVisible) {
+                        if (p1.depth > 0.1f && p2.depth > 0.1f) {
                             val startOffset = androidx.compose.ui.geometry.Offset(p1.x, p1.y)
                             val endOffset = androidx.compose.ui.geometry.Offset(p2.x, p2.y)
                             
@@ -368,6 +368,28 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
                                     )
                                 )
                             }
+                        } else if (p1.depth > 0.1f || p2.depth > 0.1f) {
+                            // One point is behind the camera, the other is in front.
+                            // We can draw a line from the bottom-center of the screen to the visible point
+                            // as a simple fallback so the line doesn't just disappear.
+                            val visibleP = if (p1.depth > 0.1f) p1 else p2
+                            val startOffset = androidx.compose.ui.geometry.Offset(screenSize.width / 2f, screenSize.height.toFloat())
+                            val endOffset = androidx.compose.ui.geometry.Offset(visibleP.x, visibleP.y)
+                            
+                            drawLine(
+                                color = Color.Cyan.copy(alpha = pulseAlpha),
+                                start = startOffset,
+                                end = endOffset,
+                                strokeWidth = 24f,
+                                cap = androidx.compose.ui.graphics.StrokeCap.Round
+                            )
+                            drawLine(
+                                color = Color.White.copy(alpha = pulseAlpha + 0.2f),
+                                start = startOffset,
+                                end = endOffset,
+                                strokeWidth = 8f,
+                                cap = androidx.compose.ui.graphics.StrokeCap.Round
+                            )
                         }
                     }
                 }
