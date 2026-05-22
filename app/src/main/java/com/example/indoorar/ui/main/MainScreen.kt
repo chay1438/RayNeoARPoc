@@ -297,6 +297,8 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
 
                 androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
                     val pathPoints = navState!!.pathPoints
+                    
+                    // First, draw a line connecting all visible segments
                     for (i in 0 until pathPoints.size - 1) {
                         val p1 = CameraProjection.projectToScreen(
                             worldPoint = pathPoints[i],
@@ -311,84 +313,56 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
                             screenHeight = screenSize.height.toFloat()
                         )
 
+                        // If both points are in front of the camera, draw normally
                         if (p1.depth > 0.1f && p2.depth > 0.1f) {
                             val startOffset = androidx.compose.ui.geometry.Offset(p1.x, p1.y)
                             val endOffset = androidx.compose.ui.geometry.Offset(p2.x, p2.y)
                             
-                            // Draw the main glowing line
-                            drawLine(
-                                color = Color.Cyan.copy(alpha = pulseAlpha),
-                                start = startOffset,
-                                end = endOffset,
-                                strokeWidth = 24f,
-                                cap = androidx.compose.ui.graphics.StrokeCap.Round
-                            )
-                            
-                            // Draw inner core to make it look like a glowing neon light
-                            drawLine(
-                                color = Color.White.copy(alpha = pulseAlpha + 0.2f),
-                                start = startOffset,
-                                end = endOffset,
-                                strokeWidth = 8f,
-                                cap = androidx.compose.ui.graphics.StrokeCap.Round
-                            )
+                            // Glowing line
+                            drawLine(color = Color.Cyan.copy(alpha = pulseAlpha), start = startOffset, end = endOffset, strokeWidth = 30f, cap = androidx.compose.ui.graphics.StrokeCap.Round)
+                            drawLine(color = Color.White.copy(alpha = pulseAlpha + 0.2f), start = startOffset, end = endOffset, strokeWidth = 10f, cap = androidx.compose.ui.graphics.StrokeCap.Round)
 
-                            // Calculate Arrow Direction
+                            // Directional Arrow
                             val dx = p2.x - p1.x
                             val dy = p2.y - p1.y
-                            // Only draw arrows if segment is reasonably long on screen
-                            if (kotlin.math.sqrt(dx*dx + dy*dy) > 100f) {
+                            if (kotlin.math.sqrt(dx*dx + dy*dy) > 50f) {
                                 val angle = kotlin.math.atan2(dy, dx)
                                 val midX = (p1.x + p2.x) / 2
                                 val midY = (p1.y + p2.y) / 2
-                                
                                 val arrowLength = 50.0
-                                val arrowAngle = Math.PI / 6 // 30 degrees
-                                
-                                val backX1 = midX - arrowLength * kotlin.math.cos(angle - arrowAngle)
-                                val backY1 = midY - arrowLength * kotlin.math.sin(angle - arrowAngle)
-                                
-                                val backX2 = midX - arrowLength * kotlin.math.cos(angle + arrowAngle)
-                                val backY2 = midY - arrowLength * kotlin.math.sin(angle + arrowAngle)
-                                
+                                val arrowAngle = Math.PI / 6
                                 val arrowPath = androidx.compose.ui.graphics.Path().apply {
                                     moveTo(midX, midY)
-                                    lineTo(backX1.toFloat(), backY1.toFloat())
+                                    lineTo((midX - arrowLength * kotlin.math.cos(angle - arrowAngle)).toFloat(), (midY - arrowLength * kotlin.math.sin(angle - arrowAngle)).toFloat())
                                     moveTo(midX, midY)
-                                    lineTo(backX2.toFloat(), backY2.toFloat())
+                                    lineTo((midX - arrowLength * kotlin.math.cos(angle + arrowAngle)).toFloat(), (midY - arrowLength * kotlin.math.sin(angle + arrowAngle)).toFloat())
                                 }
-                                
-                                drawPath(
-                                    path = arrowPath,
-                                    color = Color.Yellow.copy(alpha = 0.9f),
-                                    style = androidx.compose.ui.graphics.drawscope.Stroke(
-                                        width = 10f, 
-                                        cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                                        join = androidx.compose.ui.graphics.StrokeJoin.Round
-                                    )
-                                )
+                                drawPath(path = arrowPath, color = Color.Yellow, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 12f, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
                             }
                         } else if (p1.depth > 0.1f || p2.depth > 0.1f) {
-                            // One point is behind the camera, the other is in front.
-                            // We can draw a line from the bottom-center of the screen to the visible point
-                            // as a simple fallback so the line doesn't just disappear.
+                            // One point is behind camera. Draw from bottom center to the visible point!
                             val visibleP = if (p1.depth > 0.1f) p1 else p2
                             val startOffset = androidx.compose.ui.geometry.Offset(screenSize.width / 2f, screenSize.height.toFloat())
                             val endOffset = androidx.compose.ui.geometry.Offset(visibleP.x, visibleP.y)
                             
-                            drawLine(
-                                color = Color.Cyan.copy(alpha = pulseAlpha),
-                                start = startOffset,
-                                end = endOffset,
-                                strokeWidth = 24f,
-                                cap = androidx.compose.ui.graphics.StrokeCap.Round
-                            )
-                            drawLine(
-                                color = Color.White.copy(alpha = pulseAlpha + 0.2f),
-                                start = startOffset,
-                                end = endOffset,
-                                strokeWidth = 8f,
-                                cap = androidx.compose.ui.graphics.StrokeCap.Round
+                            drawLine(color = Color.Cyan.copy(alpha = pulseAlpha), start = startOffset, end = endOffset, strokeWidth = 30f, cap = androidx.compose.ui.graphics.StrokeCap.Round)
+                            drawLine(color = Color.White.copy(alpha = pulseAlpha + 0.2f), start = startOffset, end = endOffset, strokeWidth = 10f, cap = androidx.compose.ui.graphics.StrokeCap.Round)
+                        }
+                    }
+
+                    // Next, draw large debug nodes at every projected path point so we can guarantee Canvas is working
+                    for (point in pathPoints) {
+                        val p = CameraProjection.projectToScreen(
+                            worldPoint = point,
+                            cameraPose = poseForBreadcrumbs,
+                            screenWidth = screenSize.width.toFloat(),
+                            screenHeight = screenSize.height.toFloat()
+                        )
+                        if (p.depth > 0.1f) {
+                            drawCircle(
+                                color = Color.Magenta.copy(alpha = 0.8f),
+                                radius = 25f,
+                                center = androidx.compose.ui.geometry.Offset(p.x, p.y)
                             )
                         }
                     }
