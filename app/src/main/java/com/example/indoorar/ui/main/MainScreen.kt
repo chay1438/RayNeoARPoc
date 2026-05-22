@@ -283,38 +283,92 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
 
             // AR Breadcrumb Path
             val poseForBreadcrumbs = currentPose
-            if (navState != null && activeDestination != null && !navState!!.isReached && poseForBreadcrumbs != null) {
+            if (navState != null && activeDestination != null && !navState!!.isReached && poseForBreadcrumbs != null && screenSize.width > 0 && screenSize.height > 0) {
                 val infiniteTransition = androidx.compose.animation.core.rememberInfiniteTransition(label = "pulse")
-                val pulseScale by infiniteTransition.animateFloat(
-                    initialValue = 0.6f,
-                    targetValue = 1.0f,
+                val pulseAlpha by infiniteTransition.animateFloat(
+                    initialValue = 0.3f,
+                    targetValue = 0.8f,
                     animationSpec = androidx.compose.animation.core.infiniteRepeatable(
-                        animation = androidx.compose.animation.core.tween(800, easing = androidx.compose.animation.core.FastOutSlowInEasing),
+                        animation = androidx.compose.animation.core.tween(1000, easing = androidx.compose.animation.core.FastOutSlowInEasing),
                         repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
                     ),
-                    label = "pulseScale"
+                    label = "pulseAlpha"
                 )
 
-                navState!!.pathPoints.forEach { point ->
-                    val projection = CameraProjection.projectToScreen(
-                        worldPoint = point,
-                        cameraPose = poseForBreadcrumbs,
-                        screenWidth = screenSize.width.toFloat(),
-                        screenHeight = screenSize.height.toFloat()
-                    )
-
-                    if (projection.isVisible) {
-                        // Base size decreases with depth
-                        val baseSize = maxOf(8f, 60f / maxOf(1f, projection.depth))
-                        val dotSize = (baseSize * pulseScale).dp
-
-                        Box(
-                            modifier = Modifier
-                                .offset(x = (projection.x - (dotSize.value/2)).dp, y = (projection.y - (dotSize.value/2)).dp)
-                                .size(dotSize)
-                                .background(Color.Cyan.copy(alpha = 0.7f), androidx.compose.foundation.shape.CircleShape)
-                                .border(2.dp, Color.White.copy(alpha = 0.9f), androidx.compose.foundation.shape.CircleShape)
+                androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                    val pathPoints = navState!!.pathPoints
+                    for (i in 0 until pathPoints.size - 1) {
+                        val p1 = CameraProjection.projectToScreen(
+                            worldPoint = pathPoints[i],
+                            cameraPose = poseForBreadcrumbs,
+                            screenWidth = screenSize.width.toFloat(),
+                            screenHeight = screenSize.height.toFloat()
                         )
+                        val p2 = CameraProjection.projectToScreen(
+                            worldPoint = pathPoints[i + 1],
+                            cameraPose = poseForBreadcrumbs,
+                            screenWidth = screenSize.width.toFloat(),
+                            screenHeight = screenSize.height.toFloat()
+                        )
+
+                        if (p1.isVisible && p2.isVisible) {
+                            val startOffset = androidx.compose.ui.geometry.Offset(p1.x, p1.y)
+                            val endOffset = androidx.compose.ui.geometry.Offset(p2.x, p2.y)
+                            
+                            // Draw the main glowing line
+                            drawLine(
+                                color = Color.Cyan.copy(alpha = pulseAlpha),
+                                start = startOffset,
+                                end = endOffset,
+                                strokeWidth = 24f,
+                                cap = androidx.compose.ui.graphics.StrokeCap.Round
+                            )
+                            
+                            // Draw inner core to make it look like a glowing neon light
+                            drawLine(
+                                color = Color.White.copy(alpha = pulseAlpha + 0.2f),
+                                start = startOffset,
+                                end = endOffset,
+                                strokeWidth = 8f,
+                                cap = androidx.compose.ui.graphics.StrokeCap.Round
+                            )
+
+                            // Calculate Arrow Direction
+                            val dx = p2.x - p1.x
+                            val dy = p2.y - p1.y
+                            // Only draw arrows if segment is reasonably long on screen
+                            if (kotlin.math.sqrt(dx*dx + dy*dy) > 100f) {
+                                val angle = kotlin.math.atan2(dy, dx)
+                                val midX = (p1.x + p2.x) / 2
+                                val midY = (p1.y + p2.y) / 2
+                                
+                                val arrowLength = 50.0
+                                val arrowAngle = Math.PI / 6 // 30 degrees
+                                
+                                val backX1 = midX - arrowLength * kotlin.math.cos(angle - arrowAngle)
+                                val backY1 = midY - arrowLength * kotlin.math.sin(angle - arrowAngle)
+                                
+                                val backX2 = midX - arrowLength * kotlin.math.cos(angle + arrowAngle)
+                                val backY2 = midY - arrowLength * kotlin.math.sin(angle + arrowAngle)
+                                
+                                val arrowPath = androidx.compose.ui.graphics.Path().apply {
+                                    moveTo(midX, midY)
+                                    lineTo(backX1.toFloat(), backY1.toFloat())
+                                    moveTo(midX, midY)
+                                    lineTo(backX2.toFloat(), backY2.toFloat())
+                                }
+                                
+                                drawPath(
+                                    path = arrowPath,
+                                    color = Color.Yellow.copy(alpha = 0.9f),
+                                    style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                        width = 10f, 
+                                        cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                                        join = androidx.compose.ui.graphics.StrokeJoin.Round
+                                    )
+                                )
+                            }
+                        }
                     }
                 }
             }
