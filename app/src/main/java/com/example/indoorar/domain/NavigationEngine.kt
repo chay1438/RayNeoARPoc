@@ -42,33 +42,14 @@ class NavigationEngine {
         val pathPoints = mutableListOf<Vector3>()
         if (!isReached) {
             if (aStarPath != null && aStarPath.size > 1) {
-                // Generate dots along the A* path segments
-                for (i in 0 until aStarPath.size - 1) {
-                    val p1 = aStarPath[i]
-                    val p2 = aStarPath[i + 1]
-                    val segDist = p1.distanceTo(p2)
-                    if (segDist > 0.5f) {
-                        val numDots = (segDist / 0.5f).toInt()
-                        for (j in 1..numDots) {
-                            val fraction = (j * 0.5f) / segDist
-                            pathPoints.add(Vector3(
-                                p1.x + (p2.x - p1.x) * fraction,
-                                p1.y + (p2.y - p1.y) * fraction,
-                                p1.z + (p2.z - p1.z) * fraction
-                            ))
-                        }
-                    }
-                }
+                // We now draw continuous lines in UI, so just return the actual path nodes.
+                // Insert the current user position as the first node to connect the user to the start of the path!
+                pathPoints.add(currentVec)
+                pathPoints.addAll(aStarPath)
             } else if (distance > 0.5f) {
-                // Fallback to straight line
-                val numDots = (distance / 0.5f).toInt()
-                for (i in 1..numDots) {
-                    val fraction = (i * 0.5f) / distance
-                    val dotX = currentPose.position.x + dx * fraction
-                    val dotZ = currentPose.position.z + dz * fraction
-                    val dotY = destination.position.y 
-                    pathPoints.add(Vector3(dotX, dotY, dotZ))
-                }
+                // Fallback to straight line to destination
+                pathPoints.add(currentVec)
+                pathPoints.add(Vector3(destination.position.x, destination.position.y, destination.position.z))
             }
         }
 
