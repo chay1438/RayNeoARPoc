@@ -13,7 +13,7 @@ import kotlinx.serialization.json.Json
 object NetworkManager {
     // If testing on local emulator, use 10.0.2.2. If on physical device like AR Glasses, use your computer's local IP
     // For now, let's use 10.0.2.2 as a placeholder
-    private const val BASE_URL = "http://10.0.2.2:8080"
+    private const val BASE_URL = "https://rayneoarpoc.onrender.com"
     
     private val client = HttpClient(OkHttp) {
         install(ContentNegotiation) {
