@@ -16,6 +16,13 @@ object NetworkManager {
     private const val BASE_URL = "https://rayneoarpoc.onrender.com"
     
     private val client = HttpClient(OkHttp) {
+        engine {
+            config {
+                connectTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+                readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+                writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+            }
+        }
         install(ContentNegotiation) {
             json(Json {
                 prettyPrint = true
