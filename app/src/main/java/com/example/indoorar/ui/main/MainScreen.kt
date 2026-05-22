@@ -123,6 +123,8 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
     val scope = rememberCoroutineScope()
     
     val waypoints = remember { mutableStateListOf<Waypoint>() }
+    val walkableNodes = remember { mutableStateListOf<com.example.indoorar.shared.models.NavNode>() }
+    val walkableEdges = remember { mutableStateListOf<com.example.indoorar.shared.models.NavEdge>() }
     var screenSize by remember { mutableStateOf(IntSize.Zero) }
     var activeDestination by remember { mutableStateOf<Waypoint?>(null) }
     var activeMap by remember { mutableStateOf<com.example.indoorar.shared.models.MapLocation?>(null) }
@@ -139,6 +141,36 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
 
     LaunchedEffect(Unit) {
         waypoints.addAll(repository.loadWaypoints())
+    }
+
+    // Auto-record walkable path while in SURVEY mode
+    LaunchedEffect(currentMode) {
+        if (currentMode == AppMode.SURVEY) {
+            while (true) {
+                val pose = currentPose
+                if (pose != null) {
+                    val pos = pose.position
+                    val lastNode = walkableNodes.lastOrNull()
+                    if (lastNode == null || pos.distanceTo(lastNode.position) >= 1.0f) {
+                        val newNode = com.example.indoorar.shared.models.NavNode(
+                            id = "walkable_${java.util.UUID.randomUUID().toString()}",
+                            position = pos
+                        )
+                        walkableNodes.add(newNode)
+                        if (lastNode != null) {
+                            walkableEdges.add(
+                                com.example.indoorar.shared.models.NavEdge(
+                                    nodeAId = lastNode.id,
+                                    nodeBId = newNode.id,
+                                    weight = pos.distanceTo(lastNode.position)
+                                )
+                            )
+                        }
+                    }
+                }
+                delay(500)
+            }
+        }
     }
 
     DisposableEffect(arSessionManager) {
@@ -564,18 +596,46 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
                                                 isUploading = true
                                                 scope.launch {
                                                     try {
-                                                        // Auto-generate linear edges for POC
-                                                        val nodes = waypoints.map { com.example.indoorar.shared.models.NavNode(it.id, it.position) }
-                                                        val edges = mutableListOf<com.example.indoorar.shared.models.NavEdge>()
-                                                        for (i in 0 until nodes.size - 1) {
-                                                            edges.add(com.example.indoorar.shared.models.NavEdge(nodes[i].id, nodes[i+1].id, nodes[i].position.distanceTo(nodes[i+1].position)))
+                                                        // Construct final graph with Walkable Paths and Objects
+                                                        val allNodes = mutableListOf<com.example.indoorar.shared.models.NavNode>()
+                                                        allNodes.addAll(walkableNodes)
+                                                        val objectNodes = waypoints.map { com.example.indoorar.shared.models.NavNode(it.id, it.position) }
+                                                        allNodes.addAll(objectNodes)
+                                                        
+                                                        val allEdges = mutableListOf<com.example.indoorar.shared.models.NavEdge>()
+                                                        allEdges.addAll(walkableEdges)
+                                                        
+                                                        // Connect each object to its nearest walkable node
+                                                        if (walkableNodes.isNotEmpty()) {
+                                                            for (obj in objectNodes) {
+                                                                val nearestWalkable = walkableNodes.minByOrNull { it.position.distanceTo(obj.position) }
+                                                                if (nearestWalkable != null) {
+                                                                    allEdges.add(com.example.indoorar.shared.models.NavEdge(
+                                                                        nodeAId = nearestWalkable.id,
+                                                                        nodeBId = obj.id,
+                                                                        weight = nearestWalkable.position.distanceTo(obj.position)
+                                                                    ))
+                                                                    // Bidirectional edge for returning
+                                                                    allEdges.add(com.example.indoorar.shared.models.NavEdge(
+                                                                        nodeAId = obj.id,
+                                                                        nodeBId = nearestWalkable.id,
+                                                                        weight = obj.position.distanceTo(nearestWalkable.position)
+                                                                    ))
+                                                                }
+                                                            }
+                                                        } else {
+                                                            // Fallback: connect objects linearly if no walkable nodes exist
+                                                            for (i in 0 until objectNodes.size - 1) {
+                                                                allEdges.add(com.example.indoorar.shared.models.NavEdge(objectNodes[i].id, objectNodes[i+1].id, objectNodes[i].position.distanceTo(objectNodes[i+1].position)))
+                                                                allEdges.add(com.example.indoorar.shared.models.NavEdge(objectNodes[i+1].id, objectNodes[i].id, objectNodes[i+1].position.distanceTo(objectNodes[i].position)))
+                                                            }
                                                         }
                                                         
                                                         val mapLocation = com.example.indoorar.shared.models.MapLocation(
-                                                            id = UUID.randomUUID().toString(),
+                                                            id = java.util.UUID.randomUUID().toString(),
                                                             name = "Saved Map ${System.currentTimeMillis()}",
                                                             cloudAnchorId = "test_anchor",
-                                                            navGraph = com.example.indoorar.shared.models.NavGraph(nodes, edges, waypoints.toList())
+                                                            navGraph = com.example.indoorar.shared.models.NavGraph(allNodes, allEdges, waypoints.toList())
                                                         )
                                                         
                                                         val success = com.example.indoorar.network.NetworkManager.uploadMap(mapLocation)
@@ -583,6 +643,9 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
                                                             android.widget.Toast.makeText(context, "Survey Uploaded Successfully!", android.widget.Toast.LENGTH_SHORT).show()
                                                             currentMode = AppMode.NAVIGATION
                                                             showBottomSheet = false
+                                                            // Clear survey state for next time
+                                                            walkableNodes.clear()
+                                                            walkableEdges.clear()
                                                         } else {
                                                             android.widget.Toast.makeText(context, "Upload Failed", android.widget.Toast.LENGTH_SHORT).show()
                                                         }
