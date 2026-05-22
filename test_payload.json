@@ -1,0 +1,18 @@
+{
+  "id": "e55139a0-6b60-44ec-b87d-8153cfc584a3",
+  "name": "Saved Map 1716301234567",
+  "cloudAnchorId": "test_anchor",
+  "navGraph": {
+    "nodes": [
+      { "id": "node1", "position": {"x": 0.0, "y": 0.0, "z": 0.0} },
+      { "id": "node2", "position": {"x": 1.0, "y": 0.0, "z": 0.0} }
+    ],
+    "edges": [
+      { "nodeAId": "node1", "nodeBId": "node2", "weight": 1.0 }
+    ],
+    "waypoints": [
+      { "id": "node1", "name": "Start", "position": {"x": 0.0, "y": 0.0, "z": 0.0} },
+      { "id": "node2", "name": "End", "position": {"x": 1.0, "y": 0.0, "z": 0.0} }
+    ]
+  }
+}
