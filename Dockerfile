@@ -6,7 +6,7 @@ WORKDIR /home/gradle/src
 RUN ./gradlew :server:installDist --no-daemon
 
 # Run Stage
-FROM openjdk:17-jdk-slim
+FROM eclipse-temurin:17-jre-jammy
 EXPOSE 8080
 # Copy the built distribution from the build stage
 COPY --from=build /home/gradle/src/server/build/install/server /app
