@@ -52,3 +52,15 @@ data class MapLocation(
     val cloudAnchorId: String,
     val navGraph: NavGraph
 )
+
+@Serializable
+data class Product(
+    val id: String,
+    val title: String,
+    val description: String?,
+    val imageUrl: String?,
+    val url: String?,
+    val price: Double?,
+    val discountedPrice: Double?,
+    val discount: Double?
+)

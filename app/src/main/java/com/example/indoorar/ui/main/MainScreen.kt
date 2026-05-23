@@ -138,6 +138,11 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
     var currentMode by remember { mutableStateOf(AppMode.NAVIGATION) }
 
     var targetedPosition by remember { mutableStateOf<com.example.indoorar.shared.models.Vector3?>(null) }
+    
+    var isProcessingFrame by remember { mutableStateOf(false) }
+    var scannedProduct by remember { mutableStateOf<com.example.indoorar.shared.models.Product?>(null) }
+    var lastScannedTime by remember { mutableStateOf(0L) }
+    val barcodeScanner = remember { com.google.mlkit.vision.barcode.BarcodeScanning.getClient() }
 
     LaunchedEffect(Unit) {
         waypoints.addAll(repository.loadWaypoints())
@@ -268,6 +273,38 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
                             )
                         } else {
                             targetedPosition = null
+                        }
+                    }
+                    
+                    // ML Kit Barcode Scanning
+                    if (!isProcessingFrame && System.currentTimeMillis() - lastScannedTime > 2000L) {
+                        try {
+                            val image = frame.acquireCameraImage()
+                            isProcessingFrame = true
+                            val inputImage = com.google.mlkit.vision.common.InputImage.fromMediaImage(
+                                image,
+                                0 // upright orientation
+                            )
+                            barcodeScanner.process(inputImage)
+                                .addOnSuccessListener { barcodes ->
+                                    val barcode = barcodes.firstOrNull()?.rawValue
+                                    if (barcode != null) {
+                                        lastScannedTime = System.currentTimeMillis()
+                                        scope.launch {
+                                            val product = com.example.indoorar.network.NetworkManager.getProduct(barcode)
+                                            if (product != null) {
+                                                scannedProduct = product
+                                            }
+                                        }
+                                    }
+                                }
+                                .addOnCompleteListener {
+                                    image.close()
+                                    isProcessingFrame = false
+                                }
+                        } catch (e: Exception) {
+                            // Ignored (e.g. NotYetAvailableException)
+                            isProcessingFrame = false
                         }
                     }
                 }
@@ -732,6 +769,68 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
                         }
                     }
                 )
+            }
+            
+            // Scanned Product Overlay
+            scannedProduct?.let { product ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.4f)),
+                    contentAlignment = Alignment.BottomCenter
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp)
+                            .background(Color.White.copy(alpha = 0.9f), RoundedCornerShape(16.dp))
+                            .padding(16.dp)
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Product Found!", fontWeight = FontWeight.Bold, color = Color.Green, fontSize = 18.sp)
+                            androidx.compose.material3.IconButton(onClick = { scannedProduct = null }) {
+                                Text("X", fontWeight = FontWeight.Bold, color = Color.Black)
+                            }
+                        }
+                        
+                        Text(product.title, fontWeight = FontWeight.Bold, fontSize = 16.sp, maxLines = 2, color = Color.Black)
+                        if (!product.description.isNullOrBlank()) {
+                            Text(product.description!!, fontSize = 14.sp, color = Color.DarkGray, maxLines = 3, modifier = Modifier.padding(top = 4.dp))
+                        }
+                        
+                        Row(modifier = Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            if (product.discountedPrice != null) {
+                                Text("₹${product.discountedPrice}", fontWeight = FontWeight.Bold, fontSize = 20.sp, color = Color.Black)
+                                Spacer(modifier = Modifier.size(8.dp))
+                                Text("₹${product.price}", textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough, color = Color.Gray)
+                            } else {
+                                Text("₹${product.price}", fontWeight = FontWeight.Bold, fontSize = 20.sp, color = Color.Black)
+                            }
+                            if (product.discount != null) {
+                                Spacer(modifier = Modifier.size(8.dp))
+                                Text("${product.discount}% OFF", color = Color.Red, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        
+                        Spacer(modifier = Modifier.size(16.dp))
+                        
+                        Button(
+                            onClick = {
+                                if (!product.url.isNullOrBlank()) {
+                                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(product.url))
+                                    context.startActivity(intent)
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("View Product")
+                        }
+                    }
+                }
             }
         }
     }

@@ -43,8 +43,7 @@ class NavigationEngine {
         if (!isReached) {
             if (aStarPath != null && aStarPath.size > 1) {
                 // We now draw continuous lines in UI, so just return the actual path nodes.
-                // Insert the current user position as the first node to connect the user to the start of the path!
-                pathPoints.add(currentVec)
+                // The AStarPath already contains the user position as the first node.
                 pathPoints.addAll(aStarPath)
             } else if (distance > 0.5f) {
                 // Fallback to straight line to destination

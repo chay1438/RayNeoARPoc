@@ -71,4 +71,18 @@ object NetworkManager {
             emptyList()
         }
     }
+    
+    suspend fun getProduct(id: String): com.example.indoorar.shared.models.Product? {
+        return try {
+            val response = client.get("$BASE_URL/products/$id")
+            if (response.status == HttpStatusCode.OK) {
+                response.body<com.example.indoorar.shared.models.Product>()
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
 }

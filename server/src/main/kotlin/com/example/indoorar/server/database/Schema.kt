@@ -36,3 +36,16 @@ object Waypoints : Table() {
     val z = float("z")
     override val primaryKey = PrimaryKey(id)
 }
+
+object Products : Table() {
+    val id = varchar("id", 100)
+    val title = text("title")
+    val description = text("description").nullable()
+    val imageUrl = varchar("image_url", 500).nullable()
+    val url = varchar("url", 500).nullable()
+    val price = double("price").nullable()
+    val discountedPrice = double("discounted_price").nullable()
+    val discount = double("discount").nullable()
+    
+    override val primaryKey = PrimaryKey(id)
+}

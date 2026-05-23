@@ -125,5 +125,31 @@ fun Application.configureRouting() {
                 }
             }
         }
+        route("/products") {
+            get("/{id}") {
+                val id = call.parameters["id"] ?: return@get call.respond(HttpStatusCode.BadRequest)
+                
+                val product = transaction {
+                    val row = Products.selectAll().where { Products.id eq id }.singleOrNull()
+                        ?: return@transaction null
+                    Product(
+                        id = row[Products.id],
+                        title = row[Products.title],
+                        description = row[Products.description],
+                        imageUrl = row[Products.imageUrl],
+                        url = row[Products.url],
+                        price = row[Products.price],
+                        discountedPrice = row[Products.discountedPrice],
+                        discount = row[Products.discount]
+                    )
+                }
+                
+                if (product == null) {
+                    call.respond(HttpStatusCode.NotFound, "Product not found")
+                } else {
+                    call.respond(product)
+                }
+            }
+        }
     }
 }
