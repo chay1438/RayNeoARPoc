@@ -235,7 +235,7 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
             // ARCore Sceneview - Full screen
             io.github.sceneview.ar.ARScene(
                 modifier = Modifier.fillMaxSize(),
-                planeRenderer = false,
+                planeRenderer = (currentMode == AppMode.SURVEY),
                 onSessionUpdated = { session, frame ->
                     // Update the pose from the ARCore camera frame
                     val camera = frame.camera
