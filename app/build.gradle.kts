@@ -101,4 +101,7 @@ dependencies {
   
   // ML Kit
   implementation("com.google.mlkit:barcode-scanning:17.3.0")
+  
+  // Coil
+  implementation("io.coil-kt:coil-compose:2.6.0")
 }

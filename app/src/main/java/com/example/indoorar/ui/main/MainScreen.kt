@@ -23,8 +23,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -65,7 +67,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.UUID
 
-enum class AppMode { SURVEY, NAVIGATION }
+enum class AppMode { SURVEY, NAVIGATION, BARCODE }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -130,6 +132,7 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
     var activeMap by remember { mutableStateOf<com.example.indoorar.shared.models.MapLocation?>(null) }
     
     var isUploading by remember { mutableStateOf(false) }
+    var uploadStatusText by remember { mutableStateOf("") }   // live status shown on the button
     var isDownloading by remember { mutableStateOf(false) }
     
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
@@ -140,9 +143,16 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
     var targetedPosition by remember { mutableStateOf<com.example.indoorar.shared.models.Vector3?>(null) }
     
     var isProcessingFrame by remember { mutableStateOf(false) }
+    var isFetchingProduct by remember { mutableStateOf(false) }
     var scannedProduct by remember { mutableStateOf<com.example.indoorar.shared.models.Product?>(null) }
     var lastScannedTime by remember { mutableStateOf(0L) }
     val barcodeScanner = remember { com.google.mlkit.vision.barcode.BarcodeScanning.getClient() }
+
+    // Survey Mode — live environment detection state
+    // floorY: Y coordinate of the nearest tracked floor plane (used to snap nodes/waypoints to ground level)
+    var floorY by remember { mutableStateOf<Float?>(null) }
+    var trackedFloorCount by remember { mutableStateOf(0) }
+    var trackedWallCount by remember { mutableStateOf(0) }
 
     LaunchedEffect(Unit) {
         waypoints.addAll(repository.loadWaypoints())
@@ -154,7 +164,15 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
             while (true) {
                 val pose = currentPose
                 if (pose != null) {
-                    val pos = pose.position
+                    val rawPos = pose.position
+                    // Snap Y to the nearest tracked floor plane so every walkable node sits
+                    // exactly on the ground surface instead of at camera / chest height.
+                    // This makes distance calculations and mini-map rendering accurate.
+                    val pos = com.example.indoorar.shared.models.Vector3(
+                        x = rawPos.x,
+                        y = floorY ?: (rawPos.y - 1.5f),
+                        z = rawPos.z
+                    )
                     val lastNode = walkableNodes.lastOrNull()
                     if (lastNode == null || pos.distanceTo(lastNode.position) >= 1.0f) {
                         val newNode = com.example.indoorar.shared.models.NavNode(
@@ -255,7 +273,45 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
                         qz = arPose.qz(),
                         qw = arPose.qw()
                     )
-                    
+
+                    // ── Survey Mode: environment plane detection ─────────────────────────
+                    // ARCore tracks three plane types:
+                    //   HORIZONTAL_UPWARD_FACING  → floors / flat surfaces the user walks on
+                    //   HORIZONTAL_DOWNWARD_FACING → ceilings (ignored here)
+                    //   VERTICAL                  → walls / large vertical surfaces
+                    // We use this every frame to:
+                    //   1. Count how many floors + walls ARCore has found (HUD quality signal)
+                    //   2. Snap recorded NavNode Y and fallback Waypoint Y to real floor level
+                    //      instead of relying on a fixed "camera - 1.5 m" estimate
+                    if (currentMode == AppMode.SURVEY) {
+                        val allPlanes = session.getAllTrackables(com.google.ar.core.Plane::class.java)
+
+                        val floors = allPlanes.filter {
+                            it.type == com.google.ar.core.Plane.Type.HORIZONTAL_UPWARD_FACING &&
+                            it.trackingState == com.google.ar.core.TrackingState.TRACKING
+                        }
+                        val walls = allPlanes.filter {
+                            it.type == com.google.ar.core.Plane.Type.VERTICAL &&
+                            it.trackingState == com.google.ar.core.TrackingState.TRACKING
+                        }
+
+                        trackedFloorCount = floors.size
+                        trackedWallCount  = walls.size
+
+                        // Find the floor plane whose centre is closest to the camera's XZ position.
+                        // Its centre Y is the real ground level at the user's current location.
+                        val nearestFloor = floors.minByOrNull { plane ->
+                            val c  = plane.centerPose
+                            val dx = c.tx() - arPose.tx()
+                            val dz = c.tz() - arPose.tz()
+                            dx * dx + dz * dz          // squared distance is fine for comparison
+                        }
+                        // Fallback: if no floor has been detected yet, estimate floor as
+                        // 1.5 m below the camera (average eye/chest height when holding a phone).
+                        floorY = nearestFloor?.centerPose?.ty() ?: (arPose.ty() - 1.5f)
+                    }
+                    // ────────────────────────────────────────────────────────────────────
+
                     // Perform hit testing from the center of the screen to find the floor
                     if (screenSize.width > 0 && screenSize.height > 0) {
                         val hits = frame.hitTest(screenSize.width / 2f, screenSize.height / 2f)
@@ -277,26 +333,43 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
                     }
                     
                     // ML Kit Barcode Scanning
-                    if (!isProcessingFrame && System.currentTimeMillis() - lastScannedTime > 2000L) {
+                    if (currentMode == AppMode.BARCODE && !isProcessingFrame && System.currentTimeMillis() - lastScannedTime > 2000L) {
                         try {
                             val image = frame.acquireCameraImage()
                             isProcessingFrame = true
+                            val display = (context.getSystemService(android.content.Context.WINDOW_SERVICE) as android.view.WindowManager).defaultDisplay
+                            val rotationDegrees = when (display.rotation) {
+                                android.view.Surface.ROTATION_0 -> 90
+                                android.view.Surface.ROTATION_90 -> 0
+                                android.view.Surface.ROTATION_180 -> 270
+                                android.view.Surface.ROTATION_270 -> 180
+                                else -> 90
+                            }
+                            
                             val inputImage = com.google.mlkit.vision.common.InputImage.fromMediaImage(
                                 image,
-                                0 // upright orientation
+                                rotationDegrees
                             )
                             barcodeScanner.process(inputImage)
                                 .addOnSuccessListener { barcodes ->
                                     val barcode = barcodes.firstOrNull()?.rawValue
                                     if (barcode != null) {
                                         lastScannedTime = System.currentTimeMillis()
+
                                         scope.launch {
+                                            isFetchingProduct = true
                                             val product = com.example.indoorar.network.NetworkManager.getProduct(barcode)
+                                            isFetchingProduct = false
                                             if (product != null) {
                                                 scannedProduct = product
+                                            } else {
+                                                android.widget.Toast.makeText(context, "Product not found for ID: $barcode", android.widget.Toast.LENGTH_LONG).show()
                                             }
                                         }
                                     }
+                                }
+                                .addOnFailureListener { e ->
+                                    android.util.Log.e("BarcodeScanner", "Failed to scan", e)
                                 }
                                 .addOnCompleteListener {
                                     image.close()
@@ -311,40 +384,88 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
             )
             
             // Center Crosshair (Reticle)
-            Box(
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .size(20.dp)
-                    .background(if (targetedPosition != null) Color.Green.copy(alpha = 0.5f) else Color.Red.copy(alpha = 0.5f), androidx.compose.foundation.shape.CircleShape)
-            )
+            if (currentMode != AppMode.BARCODE) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .size(20.dp)
+                        .background(if (targetedPosition != null) Color.Green.copy(alpha = 0.5f) else Color.Red.copy(alpha = 0.5f), androidx.compose.foundation.shape.CircleShape)
+                )
+            }
+            
 
             // Overlay for projecting waypoints
             val poseForOverlay = currentPose
             if (poseForOverlay != null && screenSize.width > 0 && screenSize.height > 0) {
-                waypoints.forEach { waypoint ->
-                    val projection = CameraProjection.projectToScreen(
-                        worldPoint = waypoint.position,
-                        cameraPose = poseForOverlay,
-                        screenWidth = screenSize.width.toFloat(),
-                        screenHeight = screenSize.height.toFloat()
-                    )
+                val infiniteTransition = androidx.compose.animation.core.rememberInfiniteTransition(label = "bounce")
+                val bounceOffset by infiniteTransition.animateFloat(
+                    initialValue = -10f,
+                    targetValue = 10f,
+                    animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                        animation = androidx.compose.animation.core.tween(800, easing = androidx.compose.animation.core.FastOutSlowInEasing),
+                        repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+                    ),
+                    label = "bounceOffset"
+                )
 
-                    if (projection.isVisible) {
-                        Box(
-                            modifier = Modifier
-                                .offset(
-                                    x = projection.x.dp, 
-                                    y = projection.y.dp
-                                )
-                                .background(
-                                    if (waypoint == activeDestination) Color.Green.copy(alpha = 0.8f) else Color.Black.copy(alpha = 0.7f), 
-                                    RoundedCornerShape(8.dp)
-                                )
-                                .padding(8.dp)
-                        ) {
-                            Column {
-                                Text(text = waypoint.name, color = Color.White, style = MaterialTheme.typography.labelLarge)
-                                Text(text = "${"%.1f".format(projection.depth)}m", color = Color.LightGray, style = MaterialTheme.typography.labelSmall)
+                if (navState != null && activeDestination != null && !navState!!.isReached) {
+                    // Draw AR Path Points
+                    navState!!.pathPoints.forEachIndexed { index, point ->
+                        val isDestination = (index == navState!!.pathPoints.size - 1)
+                        val projection = CameraProjection.projectToScreen(
+                            worldPoint = point,
+                            cameraPose = poseForOverlay,
+                            screenWidth = screenSize.width.toFloat(),
+                            screenHeight = screenSize.height.toFloat()
+                        )
+                        
+                        if (projection.isVisible) {
+                            Box(
+                                modifier = Modifier
+                                    .offset(
+                                        x = projection.x.dp, 
+                                        y = (projection.y + bounceOffset).dp
+                                    )
+                                    .background(Color.White.copy(alpha = 0.8f), RoundedCornerShape(50))
+                                    .padding(if (isDestination) 12.dp else 6.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (isDestination) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text("🏠", fontSize = 32.sp)
+                                        Text(activeDestination!!.name, color = Color.Black, fontWeight = FontWeight.Bold)
+                                        Text("${"%.1f".format(projection.depth)}m", color = Color.DarkGray, fontSize = 12.sp)
+                                    }
+                                } else {
+                                    Text("🚶", fontSize = 24.sp)
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Draw Regular Waypoints
+                    waypoints.forEach { waypoint ->
+                        val projection = CameraProjection.projectToScreen(
+                            worldPoint = waypoint.position,
+                            cameraPose = poseForOverlay,
+                            screenWidth = screenSize.width.toFloat(),
+                            screenHeight = screenSize.height.toFloat()
+                        )
+
+                        if (projection.isVisible) {
+                            Box(
+                                modifier = Modifier
+                                    .offset(
+                                        x = projection.x.dp, 
+                                        y = projection.y.dp
+                                    )
+                                    .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+                                    .padding(8.dp)
+                            ) {
+                                Column {
+                                    Text(text = waypoint.name, color = Color.White, style = MaterialTheme.typography.labelLarge)
+                                    Text(text = "${"%.1f".format(projection.depth)}m", color = Color.LightGray, style = MaterialTheme.typography.labelSmall)
+                                }
                             }
                         }
                     }
@@ -474,8 +595,9 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
                 Row(
                     modifier = Modifier
                         .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(24.dp))
-                        .padding(4.dp),
-                    horizontalArrangement = Arrangement.Center,
+                        .padding(4.dp)
+                        .fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Button(
@@ -487,9 +609,10 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
                             containerColor = if (currentMode == AppMode.SURVEY) Color.Cyan.copy(alpha = 0.8f) else Color.Transparent,
                             contentColor = if (currentMode == AppMode.SURVEY) Color.Black else Color.White
                         ),
-                        shape = RoundedCornerShape(20.dp)
+                        shape = RoundedCornerShape(20.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp)
                     ) {
-                        Text("Survey Area")
+                        Text("Survey")
                     }
                     Button(
                         onClick = { currentMode = AppMode.NAVIGATION },
@@ -497,15 +620,137 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
                             containerColor = if (currentMode == AppMode.NAVIGATION) Color.Cyan.copy(alpha = 0.8f) else Color.Transparent,
                             contentColor = if (currentMode == AppMode.NAVIGATION) Color.Black else Color.White
                         ),
-                        shape = RoundedCornerShape(20.dp)
+                        shape = RoundedCornerShape(20.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp)
                     ) {
                         Text("Navigate")
+                    }
+                    Button(
+                        onClick = { currentMode = AppMode.BARCODE },
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                            containerColor = if (currentMode == AppMode.BARCODE) Color.Cyan.copy(alpha = 0.8f) else Color.Transparent,
+                            contentColor = if (currentMode == AppMode.BARCODE) Color.Black else Color.White
+                        ),
+                        shape = RoundedCornerShape(20.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp)
+                    ) {
+                        Text("Scan")
                     }
                 }
 
                 if (currentMode == AppMode.SURVEY) {
                     Text(
-                        "Survey Mode Active: Map your surroundings", 
+                        "Survey Mode Active: Map your surroundings",
+                        color = Color.Yellow,
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier
+                            .padding(top = 8.dp)
+                            .background(Color.Black.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+
+                    // ── Environment Detection HUD ────────────────────────────────────────
+                    // Shows live counts of ARCore-tracked floor and wall planes so the user
+                    // knows how well the environment is understood before walking the path.
+                    //   Green  = 2+ floors tracked  (good precision)
+                    //   Orange = 1 floor tracked    (limited — keep moving slowly)
+                    //   Red    = no floor detected  (poor — point camera at the floor)
+                    val envTrackingColor = when {
+                        trackedFloorCount >= 2 -> Color.Green
+                        trackedFloorCount == 1 -> Color(0xFFFFA500)
+                        else                   -> Color.Red
+                    }
+                    val envTrackingLabel = when {
+                        trackedFloorCount >= 2 -> "Good"
+                        trackedFloorCount == 1 -> "Limited"
+                        else                   -> "Searching…"
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .padding(top = 6.dp)
+                            .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(14.dp))
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Floor planes
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("🟩", fontSize = 15.sp)
+                            Text("Floors", color = Color.White, fontSize = 10.sp)
+                            Text(
+                                "$trackedFloorCount",
+                                color = envTrackingColor,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp
+                            )
+                        }
+                        Box(modifier = Modifier
+                            .width(1.dp)
+                            .height(36.dp)
+                            .background(Color.White.copy(alpha = 0.25f)))
+                        // Wall planes
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("🟦", fontSize = 15.sp)
+                            Text("Walls", color = Color.White, fontSize = 10.sp)
+                            Text(
+                                "$trackedWallCount",
+                                color = Color.Cyan,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp
+                            )
+                        }
+                        Box(modifier = Modifier
+                            .width(1.dp)
+                            .height(36.dp)
+                            .background(Color.White.copy(alpha = 0.25f)))
+                        // Detected floor Y (actual ground level in ARCore world space)
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("📍", fontSize = 15.sp)
+                            Text("Floor Y", color = Color.White, fontSize = 10.sp)
+                            Text(
+                                floorY?.let { "${"%.2f".format(it)}m" } ?: "---",
+                                color = envTrackingColor,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                        }
+                        Box(modifier = Modifier
+                            .width(1.dp)
+                            .height(36.dp)
+                            .background(Color.White.copy(alpha = 0.25f)))
+                        // Node count + overall quality badge
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("🗺️", fontSize = 15.sp)
+                            Text("Nodes", color = Color.White, fontSize = 10.sp)
+                            Text(
+                                "${walkableNodes.size}",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp
+                            )
+                        }
+                        Box(modifier = Modifier
+                            .width(1.dp)
+                            .height(36.dp)
+                            .background(Color.White.copy(alpha = 0.25f)))
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(if (trackedFloorCount >= 2) "✅" else if (trackedFloorCount == 1) "⚠️" else "❌", fontSize = 15.sp)
+                            Text("Quality", color = Color.White, fontSize = 10.sp)
+                            Text(
+                                envTrackingLabel,
+                                color = envTrackingColor,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+                    // ────────────────────────────────────────────────────────────────────
+                }
+
+                if (currentMode == AppMode.BARCODE) {
+                    Text(
+                        "Barcode Mode Active: Point camera at product barcode", 
                         color = Color.Yellow, 
                         style = MaterialTheme.typography.labelLarge,
                         modifier = Modifier
@@ -516,7 +761,7 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
                 }
 
                 // Top: Controls & Nav Info
-                if (navState?.destination != null && !navState!!.isReached) {
+                if (currentMode == AppMode.NAVIGATION && navState?.destination != null && !navState!!.isReached) {
                     // Navigation HUD Panel (Glassmorphism look)
                     Column(
                         modifier = Modifier
@@ -659,17 +904,58 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
                                                             navGraph = com.example.indoorar.shared.models.NavGraph(allNodes, allEdges, waypoints.toList())
                                                         )
                                                         
-                                                        val success = com.example.indoorar.network.NetworkManager.uploadMap(mapLocation)
-                                                        if (success) {
+                                                        // ── Upload with auto-retry ─────────────────────────────────
+                                                        // Render free-tier servers sleep after 15 min of inactivity
+                                                        // and take ~30–60 s to cold-start.  NeonDB serverless also
+                                                        // has a connection warm-up delay.  A single attempt often
+                                                        // loses a race against these combined cold-starts, which is
+                                                        // why the old code showed "Upload Failed" every time.
+                                                        // We now retry up to 3 times with increasing back-off so
+                                                        // the server has time to fully wake between tries.
+                                                        val maxAttempts = 3
+                                                        var lastError: String? = null
+                                                        var uploaded = false
+
+                                                        for (attempt in 1..maxAttempts) {
+                                                            uploadStatusText = if (attempt == 1)
+                                                                "Connecting to server…"
+                                                            else
+                                                                "Retry $attempt/$maxAttempts…"
+
+                                                            val result = com.example.indoorar.network.NetworkManager.uploadMap(mapLocation)
+
+                                                            if (result.isSuccess) {
+                                                                uploaded = true
+                                                                break
+                                                            }
+
+                                                            lastError = result.exceptionOrNull()?.message ?: "Unknown error"
+                                                            android.util.Log.e("IndoorAR", "Upload attempt $attempt failed: $lastError")
+
+                                                            if (attempt < maxAttempts) {
+                                                                // 5 s after 1st fail, 10 s after 2nd — enough for
+                                                                // Render + NeonDB to finish their cold-start
+                                                                uploadStatusText = "Attempt $attempt failed — retrying in ${attempt * 5}s…"
+                                                                delay(attempt * 5_000L)
+                                                            }
+                                                        }
+
+                                                        if (uploaded) {
                                                             android.widget.Toast.makeText(context, "Survey Uploaded Successfully!", android.widget.Toast.LENGTH_SHORT).show()
                                                             currentMode = AppMode.NAVIGATION
                                                             showBottomSheet = false
-                                                            // Clear survey state for next time
                                                             walkableNodes.clear()
                                                             walkableEdges.clear()
                                                         } else {
-                                                            android.widget.Toast.makeText(context, "Upload Failed", android.widget.Toast.LENGTH_SHORT).show()
+                                                            // Show the real failure reason so the user knows what went wrong
+                                                            android.widget.Toast.makeText(
+                                                                context,
+                                                                "Upload Failed after $maxAttempts attempts:\n$lastError",
+                                                                android.widget.Toast.LENGTH_LONG
+                                                            ).show()
                                                         }
+                                                        uploadStatusText = ""
+                                                        // ─────────────────────────────────────────────────────────
                                                     } finally {
                                                         isUploading = false
                                                     }
@@ -677,7 +963,13 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
                                             },
                                             enabled = !isUploading && waypoints.isNotEmpty()
                                         ) {
-                                            Text(if (isUploading) "Uploading Survey..." else "Complete Survey & Upload")
+                                            Text(
+                                                when {
+                                                    isUploading && uploadStatusText.isNotBlank() -> uploadStatusText
+                                                    isUploading -> "Uploading…"
+                                                    else -> "Complete Survey & Upload"
+                                                }
+                                            )
                                         }
                                     } else {
                                         Button(
@@ -743,7 +1035,7 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
                                     val dz = -kotlin.math.cos(yawRad) * 2f
                                     com.example.indoorar.shared.models.Vector3(
                                         x = pos.x + dx,
-                                        y = pos.y - 1.5f, // Assume floor is 1.5m below camera
+                                        y = floorY ?: (pos.y - 1.5f), // Use detected floor plane Y, or estimate if not yet found
                                         z = pos.z + dz
                                     )
                                 }
@@ -771,63 +1063,98 @@ fun ARSessionScreen(repository: WaypointRepository, modifier: Modifier = Modifie
                 )
             }
             
-            // Scanned Product Overlay
-            scannedProduct?.let { product ->
+            // Scanned Product Overlay (2D Centered Card)
+            if (scannedProduct != null) {
+                val product = scannedProduct!!
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.4f)),
-                    contentAlignment = Alignment.BottomCenter
+                        .padding(32.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Column(
+                    androidx.compose.material3.Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(16.dp)
-                            .background(Color.White.copy(alpha = 0.9f), RoundedCornerShape(16.dp))
-                            .padding(16.dp)
-                    ) {
-                        Row(
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Product Found!", fontWeight = FontWeight.Bold, color = Color.Green, fontSize = 18.sp)
-                            androidx.compose.material3.IconButton(onClick = { scannedProduct = null }) {
-                                Text("X", fontWeight = FontWeight.Bold, color = Color.Black)
-                            }
-                        }
-                        
-                        Text(product.title, fontWeight = FontWeight.Bold, fontSize = 16.sp, maxLines = 2, color = Color.Black)
-                        if (!product.description.isNullOrBlank()) {
-                            Text(product.description!!, fontSize = 14.sp, color = Color.DarkGray, maxLines = 3, modifier = Modifier.padding(top = 4.dp))
-                        }
-                        
-                        Row(modifier = Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            if (product.discountedPrice != null) {
-                                Text("₹${product.discountedPrice}", fontWeight = FontWeight.Bold, fontSize = 20.sp, color = Color.Black)
-                                Spacer(modifier = Modifier.size(8.dp))
-                                Text("₹${product.price}", textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough, color = Color.Gray)
-                            } else {
-                                Text("₹${product.price}", fontWeight = FontWeight.Bold, fontSize = 20.sp, color = Color.Black)
-                            }
-                            if (product.discount != null) {
-                                Spacer(modifier = Modifier.size(8.dp))
-                                Text("${product.discount}% OFF", color = Color.Red, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                        
-                        Spacer(modifier = Modifier.size(16.dp))
-                        
-                        Button(
-                            onClick = {
+                            .clickable {
                                 if (!product.url.isNullOrBlank()) {
                                     val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(product.url))
                                     context.startActivity(intent)
                                 }
                             },
-                            modifier = Modifier.fillMaxWidth()
+                        shape = RoundedCornerShape(16.dp),
+                        elevation = androidx.compose.material3.CardDefaults.cardElevation(defaultElevation = 8.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color.White)
+                                .padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Text("View Product")
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Product Found", color = Color.Green, fontWeight = FontWeight.Bold)
+                                androidx.compose.material3.IconButton(
+                                    onClick = { scannedProduct = null },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Text("✕", color = Color.Black, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                            
+                            Spacer(modifier = Modifier.height(12.dp))
+                            
+                            if (!product.imageUrl.isNullOrBlank()) {
+                                coil.compose.AsyncImage(
+                                    model = product.imageUrl,
+                                    contentDescription = "Product Image",
+                                    modifier = Modifier
+                                        .size(180.dp)
+                                        .clip(RoundedCornerShape(8.dp)),
+                                    contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                                )
+                                Spacer(modifier = Modifier.height(16.dp))
+                            }
+                            
+                            Text(
+                                text = product.title,
+                                color = Color.Black,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                maxLines = 2,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                            
+                            Spacer(modifier = Modifier.height(8.dp))
+                            
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                val displayPrice = product.discountedPrice ?: product.price
+                                Text("₹$displayPrice", color = Color.Black, fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
+                                
+                                if (product.discountedPrice != null) {
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("₹${product.price}", color = Color.Gray, textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("${product.discount}% OFF", color = Color.Red, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                            
+                            Spacer(modifier = Modifier.height(16.dp))
+                            
+                            Button(
+                                onClick = {
+                                    if (!product.url.isNullOrBlank()) {
+                                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(product.url))
+                                        context.startActivity(intent)
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("View on Store")
+                            }
                         }
                     }
                 }

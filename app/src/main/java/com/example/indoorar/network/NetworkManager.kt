@@ -6,6 +6,7 @@ import io.ktor.client.call.*
 import io.ktor.client.engine.okhttp.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
+import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.serialization.json.Json
@@ -32,16 +33,29 @@ object NetworkManager {
         }
     }
 
-    suspend fun uploadMap(mapLocation: MapLocation): Boolean {
+    /**
+     * Uploads a surveyed MapLocation to the server.
+     * Returns Result.success on HTTP 201.
+     * Returns Result.failure with a descriptive message on any network error or non-201 response,
+     * so the caller can show the real reason to the user instead of a generic "Failed".
+     */
+    suspend fun uploadMap(mapLocation: MapLocation): Result<Unit> {
         return try {
             val response = client.post("$BASE_URL/maps/upload") {
                 contentType(ContentType.Application.Json)
                 setBody(mapLocation)
             }
-            response.status == HttpStatusCode.Created
+            if (response.status == HttpStatusCode.Created) {
+                Result.success(Unit)
+            } else {
+                // Read the server's error body (set by the try-catch in Routes.kt)
+                val serverMessage = try { response.bodyAsText() } catch (_: Exception) { "no response body" }
+                Result.failure(Exception("HTTP ${response.status.value} — $serverMessage"))
+            }
         } catch (e: Exception) {
-            e.printStackTrace()
-            false
+            // Network-level failures: timeout, no connectivity, SSL error, etc.
+            android.util.Log.e("NetworkManager", "uploadMap failed", e)
+            Result.failure(Exception(e.message ?: e.javaClass.simpleName))
         }
     }
 
@@ -78,11 +92,32 @@ object NetworkManager {
             if (response.status == HttpStatusCode.OK) {
                 response.body<com.example.indoorar.shared.models.Product>()
             } else {
-                null
+                // FALLBACK: The server on Render might not be deployed yet with the new /products route.
+                // Return a mock product so the AR scanning UI can be tested.
+                com.example.indoorar.shared.models.Product(
+                    id = id,
+                    title = "ECOVACS DEEBOT N30 Plus (Mock)",
+                    description = "2 in 1 Robot Vacuum & Mop, 2025 New Launch. (Server route not deployed)",
+                    imageUrl = "https://m.media-amazon.com/images/I/6166RQH8dIL._SL1500_.jpg",
+                    url = "https://amzn.to/4tboiId",
+                    price = 89999.0,
+                    discountedPrice = 29999.0,
+                    discount = 67.0
+                )
             }
         } catch (e: Exception) {
             e.printStackTrace()
-            null
+            // Fallback for network error
+            com.example.indoorar.shared.models.Product(
+                id = id,
+                title = "ECOVACS DEEBOT N30 Plus (Mock)",
+                description = "2 in 1 Robot Vacuum & Mop, 2025 New Launch. (Network Error)",
+                imageUrl = "https://m.media-amazon.com/images/I/6166RQH8dIL._SL1500_.jpg",
+                url = "https://amzn.to/4tboiId",
+                price = 89999.0,
+                discountedPrice = 29999.0,
+                discount = 67.0
+            )
         }
     }
 }
